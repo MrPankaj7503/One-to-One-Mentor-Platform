@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Mentor Platform</title>
+
+<style>
+body {
+    margin: 0;
+    background: #0d1117;
+    color: white;
+    font-family: Arial;
+}
+
+/* LAYOUT */
+.container {
+    display: flex;
+    height: 100vh;
+}
+
+/* EDITOR */
+.editor {
+    flex: 3;
+    display: flex;
+    flex-direction: column;
+}
+
+textarea {
+    flex: 1;
+    background: #0d1117;
+    color: #58a6ff;
+    padding: 20px;
+    border: none;
+}
+
+/* RUN */
+.run-btn {
+    background: #238636;
+    padding: 10px;
+    border: none;
+}
+
+/* OUTPUT */
+.output {
+    height: 120px;
+    background: black;
+    padding: 10px;
+}
+
+/* RIGHT PANEL */
+.right {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #161b22;
+}
+
+/* VIDEO */
+.video-box {
+    height: 150px;
+    margin: 10px;
+    background: black;
+    position: relative;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* BADGES */
+.badge {
+    position: absolute;
+    bottom: 5px;
+    left: 5px;
+    background: rgba(0,0,0,0.6);
+    padding: 4px 8px;
+    border-radius: 5px;
+    font-size: 12px;
+}
+
+/* CONTROL BAR */
+.controls {
+    display: flex;
+    justify-content: space-around;
+    padding: 10px;
+    background: #0d1117;
+}
+
+.controls button {
+    padding: 10px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+}
+
+/* CHAT */
+.chat {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.messages {
+    flex: 1;
+    padding: 10px;
+    overflow-y: auto;
+}
+
+.input-area {
+    display: flex;
+}
+
+input {
+    flex: 1;
+    padding: 10px;
+}
+button {
+    padding: 10px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<!-- CODE -->
+<div class="editor">
+<textarea id="code">print("Meet Style UI 🚀")</textarea>
+<button class="run-btn" onclick="runCode()">▶ Run</button>
+<div class="output" id="output"></div>
+</div>
+
+<!-- RIGHT -->
+<div class="right">
+
+    <!-- LOCAL -->
+    <div class="video-box">
+        <video id="localVideo" autoplay muted></video>
+        <div class="badge" id="status">🎥 On | 🎤 On</div>
+    </div>
+
+    <!-- REMOTE -->
+    <div class="video-box">
+        <video id="remoteVideo" autoplay></video>
+        <div class="badge">Remote User</div>
+    </div>
+
+    <!-- CONTROLS -->
+    <div class="controls">
+        <button onclick="toggleVideo()">🎥</button>
+        <button onclick="toggleMic()">🎤</button>
+        <button onclick="shareScreen()">🖥️</button>
+    </div>
+
+    <!-- CHAT -->
+    <div class="chat">
+        <div class="messages" id="messages"></div>
+
+        <div class="input-area">
+            <input id="msg" placeholder="Message...">
+            <button onclick="sendMsg()">Send</button>
+        </div>
+    </div>
+
+</div>
+
+</div>
+
+<script>
+const ws = new WebSocket("ws://localhost:8080/signal");
+
+let localStream;
+let peer;
+
+// CAMERA
+navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+.then(stream => {
+    localStream = stream;
+    document.getElementById("localVideo").srcObject = stream;
+});
+
+// PEER
+function createPeer() {
+    peer = new RTCPeerConnection();
+
+    localStream.getTracks().forEach(t => peer.addTrack(t, localStream));
+
+    peer.ontrack = e => {
+        document.getElementById("remoteVideo").srcObject = e.streams[0];
+    };
+
+    peer.onicecandidate = e => {
+        if (e.candidate) {
+            ws.send(JSON.stringify({ type: "ice", data: e.candidate }));
+        }
+    };
+}
+
+// SIGNALING
+ws.onmessage = async msg => {
+    let data = JSON.parse(msg.data);
+
+    if (data.type === "offer") {
+        createPeer();
+        await peer.setRemoteDescription(data.data);
+
+        let answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+
+        ws.send(JSON.stringify({ type: "answer", data: answer }));
+    }
+
+    if (data.type === "answer") {
+        await peer.setRemoteDescription(data.data);
+    }
+
+    if (data.type === "ice") {
+        await peer.addIceCandidate(data.data);
+    }
+
+    if (data.type === "chat") addMsg(data.data);
+};
+
+// START CALL
+setTimeout(async () => {
+    createPeer();
+    let offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+    ws.send(JSON.stringify({ type: "offer", data: offer }));
+}, 2000);
+
+// CHAT
+function sendMsg() {
+    let input = document.getElementById("msg");
+    let text = input.value;
+
+    if (!text) return;
+
+    ws.send(JSON.stringify({ type: "chat", data: text }));
+    addMsg(text);
+    input.value = "";
+}
+
+function addMsg(text) {
+    let box = document.getElementById("messages");
+    box.innerHTML += "<div>" + text + "</div>";
+    box.scrollTop = box.scrollHeight;
+}
+
+// SCREEN SHARE
+async function shareScreen() {
+    let screen = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    let track = screen.getTracks()[0];
+
+    let sender = peer.getSenders().find(s => s.track.kind === "video");
+    sender.replaceTrack(track);
+}
+
+// TOGGLES
+let videoEnabled = true;
+let micEnabled = true;
+
+function toggleVideo() {
+    let track = localStream.getVideoTracks()[0];
+    videoEnabled = !videoEnabled;
+    track.enabled = videoEnabled;
+    updateStatus();
+}
+
+function toggleMic() {
+    let track = localStream.getAudioTracks()[0];
+    micEnabled = !micEnabled;
+    track.enabled = micEnabled;
+    updateStatus();
+}
+
+function updateStatus() {
+    document.getElementById("status").innerText =
+        (videoEnabled ? "🎥 On" : "🚫 Off") +
+        " | " +
+        (micEnabled ? "🎤 On" : "🔇 Muted");
+}
+
+// PYTHON
+async function runCode() {
+    let code = document.getElementById("code").value;
+    let output = document.getElementById("output");
+
+    if (!window.pyodide) {
+        let script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js";
+        document.body.appendChild(script);
+
+        script.onload = async () => {
+            window.pyodide = await loadPyodide();
+            execute(code);
+        };
+    } else execute(code);
+}
+
+async function execute(code) {
+    let py = window.pyodide;
+
+    py.runPython(`
+import sys
+from io import StringIO
+sys.stdout = StringIO()
+    `);
+
+    await py.runPythonAsync(code);
+
+    let result = py.runPython("sys.stdout.getvalue()");
+    document.getElementById("output").innerText = result;
+}
+</script>
+
+</body>
+</html>
